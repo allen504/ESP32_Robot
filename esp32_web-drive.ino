@@ -1,8 +1,8 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-const char* ssid = "Network_name";
-const char* password = "Network_password";
+const char* ssid = "network";
+const char* password = "password";
 
 // Optional: super simple “auth” token so random devices on your LAN can’t drive it.
 // Set to "" to disable.
@@ -24,14 +24,14 @@ void stop(){
   digitalWrite(motor2pin2, LOW);
 }
 
-void forward(){
+void backward(){
   digitalWrite(motor1pin1, HIGH);
   digitalWrite(motor1pin2, LOW);
   digitalWrite(motor2pin1, HIGH);
   digitalWrite(motor2pin2, LOW);
 }
 
-void backward(){
+void forward(){
   digitalWrite(motor1pin1, LOW);
   digitalWrite(motor1pin2, HIGH);
   digitalWrite(motor2pin1, LOW);
@@ -91,15 +91,15 @@ void handleRoot() {
 
   <div class="grid">
     <div></div>
-    <button id="btnF">▲</button>
+    <button id="btnF">^</button>
     <div></div>
 
-    <button id="btnL">◀</button>
-    <button id="btnS">■ STOP</button>
-    <button id="btnR">▶</button>
+    <button id="btnL"><</button>
+    <button id="btnS">STOP</button>
+    <button id="btnR">></button>
 
     <div></div>
-    <button id="btnB">▼</button>
+    <button id="btnB">v</button>
     <div></div>
 
     <button class="wide" id="btnPing">Ping</button>
