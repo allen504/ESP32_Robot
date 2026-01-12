@@ -1,8 +1,8 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-const char* ssid = "iPhone";
-const char* password = "jSpicy504";
+const char* ssid = "Network_name";
+const char* password = "Network_password";
 
 // Optional: super simple “auth” token so random devices on your LAN can’t drive it.
 // Set to "" to disable.
