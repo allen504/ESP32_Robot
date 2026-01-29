@@ -1,97 +1,93 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WebSocketsClient.h>
+#include <HTTPClient.h>
 
-// ----------------------- USER SETTINGS -----------------------
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID = "network";
+const char* WIFI_PASS = "password";
 
-// Put the robot ESP32's IP address here (check Serial output from the robot at boot)
-const char* ROBOT_IP  = "192.168.1.123";
+const char* ROBOT_IP  = "192.168.10.3";
+const uint16_t ROBOT_HTTP_PORT = 80;
 
-// Most ESP32 web-drive sketches use WebSocket port 81 and path "/"
-const uint16_t ROBOT_WS_PORT = 81;
-const char* ROBOT_WS_PATH = "/";
+const char* API_TOKEN = "letmein"; // must match robot's API_TOKEN
 
-// Command mapping (common in ESP32 web-drive examples)
-const int CMD_STOP  = 0;
-const int CMD_LEFT  = 4;
-const int CMD_RIGHT = 8;
-// ------------------------------------------------------------
-
-// Rotary encoder pins (change if you want)
 static const int ENC_A = 22; // CLK
 static const int ENC_B = 23; // DT
 
-// Behavior tuning
-static const unsigned long STEER_HOLD_MS = 150;  // after last encoder tick, send STOP
-static const unsigned long SEND_MIN_GAP_MS = 25; // don't spam the socket
+static const unsigned long STEER_HOLD_MS = 150;
+static const unsigned long SEND_MIN_GAP_MS = 80;
 
-WebSocketsClient webSocket;
-
-// Encoder state
 volatile int lastA = HIGH;
 volatile long tickCount = 0;
 
-// Command state
-int lastSentCmd = -1;
+enum Cmd { NONE, LEFT, RIGHT, STOP };
+Cmd lastSent = NONE;
 unsigned long lastTickMs = 0;
 unsigned long lastSendMs = 0;
 
 void IRAM_ATTR isrEncA() {
   int a = digitalRead(ENC_A);
   int b = digitalRead(ENC_B);
-
-  // Trigger on changes; determine direction from B at the moment A changes
   if (a != lastA) {
     lastA = a;
-    if (a == LOW) { // count on one edge only to reduce bounce sensitivity
-      if (b == HIGH) tickCount++;   // one direction
-      else tickCount--;             // other direction
+    if (a == LOW) {
+      if (b == HIGH) tickCount++;
+      else tickCount--;
     }
   }
 }
 
-void sendCmd(int cmd) {
-  unsigned long now = millis();
-  if (cmd == lastSentCmd) return;
-  if (now - lastSendMs < SEND_MIN_GAP_MS) return;
+String makeCmdUrl(const char* m) {
+  String url = "http://";
+  url += ROBOT_IP;
+  if (ROBOT_HTTP_PORT != 80) {
+    url += ":";
+    url += ROBOT_HTTP_PORT;
+  }
+  url += "/cmd?m=";
+  url += m;
 
-  char msg[8];
-  snprintf(msg, sizeof(msg), "%d", cmd);
-  webSocket.sendTXT(msg);
-
-  lastSentCmd = cmd;
-  lastSendMs = now;
-
-  Serial.print("Sent cmd: ");
-  Serial.println(cmd);
+  // token param name is "t" in your robot code
+  if (API_TOKEN && strlen(API_TOKEN) > 0) {
+    url += "&t=";
+    url += API_TOKEN;
+  }
+  return url;
 }
 
+void sendCmd(Cmd cmd) {
+  unsigned long now = millis();
+  if (cmd == lastSent) return;
+  if (now - lastSendMs < SEND_MIN_GAP_MS) return;
 
-void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
-  switch (type) {
-    case WStype_DISCONNECTED:
-      Serial.println("[WS] Disconnected");
-      break;
-    case WStype_CONNECTED:
-      Serial.printf("[WS] Connected to: %s\n", payload);
-      // Immediately stop on connect (safe default)
-      sendCmd(CMD_STOP);
-      break;
-    case WStype_TEXT:
-      // Optional: robot may send text back
-      Serial.printf("[WS] RX: %.*s\n", (int)length, (const char*)payload);
-      break;
-    default:
-      break;
-  }
+  const char* m = nullptr;
+  if (cmd == LEFT)  m = "left";
+  if (cmd == RIGHT) m = "right";
+  if (cmd == STOP)  m = "stop";
+  if (!m) return;
+
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  HTTPClient http;
+  String url = makeCmdUrl(m);
+  http.begin(url);
+  int code = http.GET();
+  String body = http.getString();
+  http.end();
+
+  Serial.print("GET ");
+  Serial.print(url);
+  Serial.print(" -> ");
+  Serial.print(code);
+  Serial.print(" | ");
+  Serial.println(body);
+
+  lastSent = cmd;
+  lastSendMs = now;
 }
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-
   Serial.print("Connecting WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(250);
@@ -102,17 +98,9 @@ void connectWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-void setupWebSocket() {
-  // server address, port, URL
-  webSocket.begin(ROBOT_IP, ROBOT_WS_PORT, ROBOT_WS_PATH); // pattern from library examples :contentReference[oaicite:4]{index=4}
-  webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(2000);
-}
-
 void setupEncoder() {
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
-
   lastA = digitalRead(ENC_A);
   attachInterrupt(digitalPinToInterrupt(ENC_A), isrEncA, CHANGE);
 }
@@ -123,14 +111,12 @@ void setup() {
 
   setupEncoder();
   connectWiFi();
-  setupWebSocket();
+  sendCmd(STOP);
 }
 
 void loop() {
-  webSocket.loop();
-
-  // Read accumulated ticks safely
   static long lastTicks = 0;
+
   long ticksSnapshot;
   noInterrupts();
   ticksSnapshot = tickCount;
@@ -140,16 +126,15 @@ void loop() {
     long delta = ticksSnapshot - lastTicks;
     lastTicks = ticksSnapshot;
 
-    // If delta positive -> RIGHT, negative -> LEFT
-    if (delta > 0) sendCmd(CMD_RIGHT);
-    else sendCmd(CMD_LEFT);
+   if (delta > 0) sendCmd(LEFT);
+else sendCmd(RIGHT);
+
 
     lastTickMs = millis();
   }
 
-  // If the knob stopped moving, send STOP after a short hold
   if (lastTickMs != 0 && (millis() - lastTickMs) > STEER_HOLD_MS) {
-    sendCmd(CMD_STOP);
+    sendCmd(STOP);
     lastTickMs = 0;
   }
 }
